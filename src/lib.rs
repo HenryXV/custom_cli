@@ -36,9 +36,16 @@ struct CatArgs {
     /// File path
     file: Option<String>,
 
+    #[arg(long, short = 'b')]
+    number_nonblank: bool,
+
     /// Display $ at end of each line
     #[arg(long, short)]
     show_ends: bool,
+
+    /// Display TAB characters as ^I
+    #[arg(long, short = 'T')]
+    show_tabs: bool,
 
     /// Number all output lines
     #[arg(long, short)]
@@ -64,11 +71,18 @@ fn echo(args: &Message) -> Result<(), Box<dyn Error>> {
 
 fn cat(args: &CatArgs) -> Result<(), Box<dyn Error>> {
     if let Ok(lines) = read_lines(args.file.as_ref().unwrap_or(&String::from(""))) {
+        let mut blank_lines = 0;
         for (index, line) in lines.flatten().enumerate() {
             let mut fmt_line = String::new();
 
-            if args.number {
-                fmt_line.push_str(format!("{:>width$}  ", index, width = 6).as_str());
+            if args.number || args.number_nonblank {
+                let line_number = format!("{:>width$}  ", index + 1 - blank_lines, width = 6);
+                fmt_line.push_str(line_number.as_str());
+
+                if line.trim().is_empty() && args.number_nonblank {
+                    blank_lines += 1;
+                    fmt_line.clear();
+                }
             }
 
             fmt_line.push_str(line.as_str());
@@ -76,6 +90,8 @@ fn cat(args: &CatArgs) -> Result<(), Box<dyn Error>> {
             if args.show_ends {
                 fmt_line.push('$');
             }
+
+            fmt_line = fmt_line.replace('\t', "^I");
 
             println!("{fmt_line}");
         }
@@ -96,6 +112,7 @@ where
 mod tests {
     use assert_cmd::Command;
     use assert_fs::prelude::{FileTouch, FileWriteStr, PathChild};
+    use std::fs;
 
     #[test]
     fn test_echo_command() {
@@ -112,18 +129,31 @@ mod tests {
     fn test_cat_command() {
         let temp_dir = assert_fs::TempDir::new().unwrap();
         temp_dir.child("test.txt").touch().unwrap();
-        temp_dir.child("test.txt").write_str("hello file!").unwrap();
+        temp_dir
+            .child("test.txt")
+            .write_str(
+                fs::read_to_string("tests/assets/test_file.txt")
+                    .unwrap()
+                    .as_str(),
+            )
+            .unwrap();
 
         let mut cmd = Command::cargo_bin(assert_cmd::crate_name!()).unwrap();
 
-        let assert = cmd.arg("cat").arg(temp_dir.child("test.txt").path());
-
-        assert.assert().success().stdout("hello file!\n");
-        assert
+        let output = cmd
+            .arg("cat")
+            .arg(temp_dir.child("test.txt").path())
             .arg("-s")
             .arg("-n")
-            .assert()
-            .success()
-            .stdout("     0  hello file!$\n");
+            .arg("-b")
+            .arg("-T")
+            .output()
+            .unwrap();
+
+        let expected_output = fs::read_to_string("tests/assets/cat_command_result.txt").unwrap();
+
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected_output);
+
+        temp_dir.close().unwrap();
     }
 }
